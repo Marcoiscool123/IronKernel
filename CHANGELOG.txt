@@ -1,0 +1,14 @@
+IronKernel v0.02 — released Sun Mar  8 11:54:28 PM CDT 2026
+  - x86_64 long mode
+  - ELF64 loader
+  - ring-3 user mode via iretq
+  - int 0x80 syscalls (write, exit)
+  - preemptive scheduler
+  - FAT12 filesystem
+IronKernel v0.02 — released Sun Mar  8 11:54:39 PM CDT 2026
+  - x86_64 long mode
+  - ELF64 loader
+  - ring-3 user mode via iretq
+  - int 0x80 syscalls (write, exit)
+  - preemptive scheduler
+  - FAT12 filesystem

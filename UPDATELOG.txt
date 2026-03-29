@@ -1,0 +1,186 @@
+IronKernel — UPDATELOG
+======================
+
+--- SESSION 1: 2026-03-19 ---
+
+MEMORY FIXES
+
+[FIX] vmm_map_page_in(): null-frame guard on pmm_alloc_frame()
+  If pmm_alloc_frame() returned 0 (OOM) while allocating an intermediate
+  page table frame (PML4/PDPT/PD/PT), the code cast 0 to a uint64_t* and
+  wrote 512 zeros to physical address 0, corrupting the BIOS data area / IVT.
+  Each allocation site now checks for 0 and returns -1 on OOM.
+  Return type changed: void → int (0=success, -1=OOM).
+
+[FIX] vmm_map_page(): same null-frame guard. Return type void → int.
+
+[FIX] vmm.h: both vmm_map_page() and vmm_map_page_in() declarations updated.
+
+[FIX] elf.c: both vmm_map_page_in() call sites now check return value;
+  on failure, free proc_cr3, free elf_buf, unlock scheduler, return -1.
+
+[FIX] heap.c: heap_init() checks vmm_map_page() return and calls heap_panic()
+  on failure instead of silently mapping an invalid virtual range.
+
+[FIX] fat12_write_file(): removed duplicate fat12_flush_fat() call.
+  The FAT was flushed twice in sequence; second call was redundant.
+
+
+PROCESS ISOLATION — TODO [20] COMPLETE
+
+[NEW] task_t: added two fields:
+  - uint64_t cr3        — per-task page table base register
+  - uint64_t kstack_top — kernel stack top used for TSS.rsp0
+
+[NEW] sched_init(): initialises shell task:
+  - tasks[0].cr3        = vmm_kernel_cr3()
+  - tasks[0].kstack_top = tss_get()->rsp0  (boot-time ring-0 stack top)
+
+[NEW] task_spawn(): initialises spawned task:
+  - t->cr3        = vmm_kernel_cr3()
+  - t->kstack_top = t->stack + TASK_STACK_SIZE
+
+[NEW] sched_tick(): on every context switch:
+  1. vmm_load_cr3(tasks[next].cr3)         — load next task's address space
+  2. tss_set_rsp0(tasks[next].kstack_top)  — point TSS.rsp0 at next task's
+     kernel stack so ring-3 interrupts land in the right place
+
+[FIXED] elf_exec(): process isolation is now fully active during user execution:
+  - tasks[cur].cr3 = proc_cr3 BEFORE entering user mode, so the scheduler
+    correctly restores proc_cr3 if an IRQ fires during user execution.
+  - tasks[cur].cr3 = kern_cr3 AFTER user_mode_enter returns, before freeing.
+  - Removed irq0_mask() / irq0_unmask() — the scheduler can now freely
+    preempt user code; CR3 tracking ensures correctness.
+  - __asm__ sti before user_mode_enter / cli after return for clean transition.
+  - tss_set_rsp0(tasks[cur].kstack_top) called before entry so ring-3
+    interrupts always have a valid kernel stack.
+
+Result: each user process runs in a completely isolated address space;
+  the scheduler correctly switches page tables on every task switch;
+  ring-3 interrupts always land on the correct per-task kernel stack.
+
+
+SHELL / FILESYSTEM — BASH-LIKE (ALL COMMANDS)
+
+[NEW] parse83() helper — shared 8.3 filename parser used by all file commands.
+  Advances a const char** pointer; handles uppercase conversion and dot parsing.
+  Eliminated duplicate parsing code that previously existed in cat/exec/rm/write.
+
+[IMPROVED] ls [path]
+  - ls alone: lists current directory (unchanged)
+  - ls subdir: saves CWD, navigates to path, lists it, restores CWD
+  Uses fat12_save_cwd() / fat12_restore_cwd() for safe temporary navigation.
+
+[IMPROVED] cat FILE [FILE2 FILE3 ...]
+  - Supports any number of filenames on one line
+  - Files are printed in sequence (concatenated)
+  - Per-file error reported if not found; continues to next file
+
+[IMPROVED] rm FILE [FILE2 FILE3 ...]
+  - Deletes each listed file in order
+  - Per-file result reported (deleted / not found)
+
+[IMPROVED] write FILE.EXT content
+  - Now uses parse83() for consistent filename parsing
+  - Content is everything after the filename (same behaviour)
+
+[IMPROVED] mkdir [-p] DIR [DIR2 ...]
+  - Accepts multiple names: mkdir src tests docs
+  - -p flag: mkdir -p src/kernel/boot creates the full nested path,
+    entering each directory as it goes, creating missing ones
+
+[IMPROVED] cd [path]
+  - Navigates full slash-separated paths: cd src/kernel
+  - cd /        — root from any depth
+  - cd -        — previous directory (bash cd -)
+  - cd (no arg) — root (Unix convention; was previously cd ..)
+  - Implemented via fat12_chdir_one() internal helper + path splitter
+
+[NEW] cp SRC.EXT DST.EXT
+  Copies a file in the current directory to a new name.
+  Reads entire file into a 4KB buffer then writes to the destination.
+
+[NEW] mv SRC.EXT DST.EXT
+  Renames a file by rewriting its 8.3 directory entry in-place
+  (no data movement — only the name fields are updated).
+  Implemented via fat12_rename() in fat12.c.
+
+[NEW] pwd
+  Prints the current working directory path string (fat12_cwd).
+
+[NEW] touch FILE.EXT
+  Creates an empty file if it does not exist; leaves existing files
+  unchanged (writes 0 bytes, which creates the directory entry).
+
+[IMPROVED] help
+  Completely rewritten with HCMD() macro for consistent formatting.
+  Split into "system" and "files" sections. All new commands listed.
+  Removed redundant repetition in formatting code.
+
+[NEW] fat12_save_cwd() / fat12_restore_cwd()
+  Save and restore the complete CWD state (path string, cluster,
+  depth counter, parent cluster stack). Used by ls [path] and mkdir -p.
+
+[NEW] fat12_rename()
+  Renames an entry in the current directory by rewriting its 8.3 name
+  in-place. Does not touch data clusters. Returns 0/−1.
+
+[NEW] fat12_cwd_state_t struct in fat12.h
+  Opaque snapshot of CWD state for save/restore.
+
+[IMPROVED] CWD path string: directory names now stored lowercase for
+  readability (e.g. /docs/src instead of /DOCS/SRC).
+
+
+--- SESSION 2: 2026-03-19 ---
+
+CP / MV CROSS-DIRECTORY SUPPORT
+
+[IMPROVED] cp SRC.EXT [DIR/]DST.EXT
+  Previously: same-directory copy only (both names must be in CWD).
+  Now: destination can be any of:
+    - a filename in CWD          cp a.txt b.txt
+    - a directory name           cp a.txt docs
+    - a path + trailing slash    cp a.txt docs/src/
+    - a path + new filename      cp a.txt docs/src/b.txt
+  Implementation:
+    1. Source file is read into cp_buf BEFORE any CWD change.
+    2. CWD is saved via fat12_save_cwd().
+    3. cp_resolve_dest() splits the destination token at the last '/':
+       - path part (if any) → fat12_chdir() to navigate there
+       - name part (if any) → parse83() to get 8.3 dest name
+       - name part empty (trailing '/') → keep source 8.3 name
+       - no slash, has dot → filename in CWD (no navigation)
+       - no slash, no dot → try fat12_chdir(); if success use source name,
+         else treat token as an extension-less filename
+    4. File written in (possibly new) directory.
+    5. CWD restored via fat12_restore_cwd().
+
+[IMPROVED] mv SRC.EXT [DIR/]DST.EXT
+  Previously: same-directory rename only (fat12_rename in-place).
+  Now: destination follows same rules as cp above.
+  Strategy:
+    - Same-directory rename (no slash, not a dir): fat12_rename() only —
+      zero data movement, just rewrites the 8.3 directory entry.
+    - Cross-directory move: read source → navigate → write → restore CWD
+      → fat12_delete source.  Effectively: cp + rm, atomically from the
+      user's perspective.
+
+[NEW] get_token() — file-scope helper
+  Extracts the next space-delimited raw token (preserving '/' and '.')
+  from *src, for use by cp/mv destination parsing.
+
+[NEW] cp_resolve_dest() — file-scope helper
+  Navigates CWD to the destination directory and fills cp_dst_name /
+  cp_dst_ext based on the token in cp_token.  Caller must save/restore
+  CWD; returns 0 on success, -1 on navigation or parse failure.
+
+
+SUMMARY
+
+  Memory:            3 bugs fixed (2× VMM OOM null-deref, 1× double FAT flush)
+  Process isolation: CR3 + TSS.rsp0 fully managed per-task; scheduler-safe
+                     user-mode exec without IRQ masking
+  Shell:             9 commands improved or extended; 6 new commands added
+                     (cp, mv, pwd, touch + cp_resolve_dest/get_token helpers);
+                     cp and mv now support cross-directory destinations
