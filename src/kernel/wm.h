@@ -38,8 +38,10 @@ typedef struct {
 } wm_win_t;
 
 extern int      wm_focused;
+extern int      wm_z_top;         /* index of visually topmost window  */
 extern wm_win_t wm_wins[WM_MAX_WIN];
 extern uint32_t wm_cur_fg;        /* current text fg colour (32bpp RGB) for hook output */
+extern int      wm_is_running;    /* 1 once wm_run() has been entered */
 
 /* Create a window; returns index or -1 */
 int  wm_create(int x, int y, int w, int h, const char *title);

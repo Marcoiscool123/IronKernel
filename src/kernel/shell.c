@@ -22,6 +22,7 @@
 #include "../drivers/speaker.h"
 #include "../drivers/ac97.h"
 #include "klog.h"
+#include "browser.h"
 
 
 
@@ -590,6 +591,7 @@ static void cmd_help(void)
     HCMD("nslookup ", "<host|ip>              ", "DNS forward or reverse lookup");
     HCMD("ping     ", "<host|ip>              ", "ICMP echo request");
     HCMD("wget     ", "<host[/path]>          ", "HTTP GET  e.g. wget neverssl.com/");
+    HCMD("browser  ", "[http://]host[/path]   ", "text-mode HTML browser (GUI only)");
     HCMD("udpsend  ", "<ip> <port> <msg>      ", "send a UDP datagram");
     HCMD("netsend  ", "                       ", "send raw ARP broadcast (NIC test)");
 
@@ -2130,6 +2132,7 @@ void shell_dispatch(char* line)
     else if (str_eq(cmd, "ping"))     cmd_ping(args);
     else if (str_eq(cmd, "udpsend"))  cmd_udpsend(args);
     else if (str_eq(cmd, "wget"))     cmd_wget(args);
+    else if (str_eq(cmd, "browser"))  cmd_browser(args);
     else if (str_eq(cmd, "fsinfo"))   cmd_fsinfo();
     else if (str_eq(cmd, "diskread")) cmd_diskread(args);
     else if (str_eq(cmd, "gfx"))      cmd_gfx();
@@ -2207,7 +2210,7 @@ static const char * const sh_cmds[] = {
     "mv",       "netinfo",  "netsend",
     "nslookup", "ping",     "poweroff", "ps",       "pwd",
     "reboot",   "rm",       "shutdown", "touch",    "udpsend",
-    "uptime",   "version",  "wget",     "write",    (void*)0
+    "browser",  "uptime",   "version",  "wget",     "write",    (void*)0
 };
 
 static void sh_tab_complete(char *buf, uint32_t *plen, uint32_t *ppos)

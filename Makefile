@@ -77,7 +77,8 @@ OBJ         := $(BUILD_DIR)/boot.o \
                $(BUILD_DIR)/panic.o \
                $(BUILD_DIR)/klog.o \
                $(BUILD_DIR)/speaker.o \
-               $(BUILD_DIR)/ac97.o
+               $(BUILD_DIR)/ac97.o \
+               $(BUILD_DIR)/browser.o
 # All three object files must be linked together into myos.bin.
 # The linker resolves: boot.asm's 'call kernel_main' → kernel.o's kernel_main
 # and kernel.c's calls to vga_init/vga_print → vga.o's implementations.
@@ -236,6 +237,9 @@ $(BUILD_DIR)/speaker.o: src/drivers/speaker.c
 	$(CC) $(CC_FLAGS) $< -o $@
 
 $(BUILD_DIR)/ac97.o: src/drivers/ac97.c
+	$(CC) $(CC_FLAGS) $< -o $@
+
+$(BUILD_DIR)/browser.o: src/kernel/browser.c
 	$(CC) $(CC_FLAGS) $< -o $@
 
 $(KERNEL): $(OBJ) src/boot/linker.ld

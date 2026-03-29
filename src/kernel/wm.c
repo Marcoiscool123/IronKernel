@@ -74,6 +74,7 @@
 wm_win_t wm_wins[WM_MAX_WIN];
 int      wm_focused  = -1;
 uint32_t wm_cur_fg   = C_WIN_TXT;
+int      wm_is_running = 0;
 
 /* ELF pixel-buffer GFX — one global buffer; only one ELF runs at a time */
 uint32_t     wm_elf_gfx_buf[WM_ELF_GFX_MAXH * WM_ELF_GFX_MAXW];
@@ -89,7 +90,7 @@ static int wm_demo_id  = -1;   /* color demo window — rendered with pixel ops 
 /* Visual Z-top: the window drawn last (visually on top).
    Decoupled from wm_focused (keyboard) so ELF windows can appear
    in front without stealing keyboard focus from the shell. */
-static int wm_z_top = -1;
+int wm_z_top = -1;
 
 /* Mutex: only one user_mode_enter may be active at a time */
 static volatile int elf_running = 0;
@@ -1410,6 +1411,7 @@ static void wm_redraw_input(int win, const char *buf, int len,
 /* ── wm_run — main entry point ────────────────────────────────────── */
 void wm_run(void)
 {
+    wm_is_running = 1;
     /* Don't install hooks yet — splash uses direct framebuffer drawing */
     mouse_init();
     wm_splash();
@@ -1814,9 +1816,13 @@ void wm_run(void)
                back buffer and blit those rows to screen.  Skips full scene
                redraw (800×600 clear + all windows) which was the main cause
                of "gets slow over time" from the per-second full redraw.
-               We erase the old cursor first so it doesn't ghost above the
-               taskbar rows (the partial blit only covers rows 580..599). */
-            vga_backbuf_to_screen_rect(last_cursor_x, last_cursor_y, CUR_W, CUR_H);
+               Cursor erase/redraw is deferred to after end_frame_partial and
+               wrapped in sched_lock so the cursor is never absent for more
+               than a few microseconds — moving the erase to the top (before
+               the clock render) left a ~200μs cursor-absent window that
+               included possible 10ms task-switch gaps, causing the cursor to
+               visibly vanish once per second, especially noticeable during
+               fast mouse movement. */
             uint32_t ticks = pit_get_ticks();
             uint32_t secs  = (ticks / 100) % 60;
             uint32_t mins  = (ticks / 100) / 60;
@@ -1849,14 +1855,15 @@ void wm_run(void)
                     draw_window(i);
             }
             vga_end_frame_partial(TBAR_Y, TBAR_H);   /* blit 800×20 rows only */
-            /* Snapshot after partial blit — cursor is in non-taskbar rows
-               so the partial blit didn't touch it; snapshot gives consistent
-               draw and last_cursor coordinates.
-               sched_lock guards the final draw: the cursor was erased from
-               screen at the top of this branch; if a task switch lands here
-               before cursor_draw, the cursor is absent for a full quantum. */
+            /* Atomically erase old cursor then draw at new position.
+               Both operations inside sched_lock so the cursor is absent
+               for < 10μs — no task-switch gap can land between them.
+               The partial blit above only covers rows 580..599; any cursor
+               pixels outside that band are still on screen at old position,
+               which is correct — we replace them atomically here. */
             int cmx = mouse_x, cmy = mouse_y;
             sched_lock();
+            vga_backbuf_to_screen_rect(last_cursor_x, last_cursor_y, CUR_W, CUR_H);
             cursor_draw(cmx, cmy);
             sched_unlock();
             last_cursor_x = cmx; last_cursor_y = cmy;
