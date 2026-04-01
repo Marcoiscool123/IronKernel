@@ -11,6 +11,7 @@
  */
 
 #include "wm.h"
+#include "../drivers/serial.h"
 #include "../kernel/shell.h"
 #include "../kernel/types.h"
 #include "../kernel/sched.h"
@@ -668,6 +669,8 @@ static void draw_window(int id)
     }
 
     /* ── Text content ── */
+    if (wp->vis_rows > WM_BUF_ROWS || wp->vis_cols > WM_BUF_COLS)
+        serial_puts("draw_window: vis_rows/cols OOB!\n");
     for (int r = 0; r < wp->vis_rows; r++) {
         int row = wp->top_row + r;
         if (row >= WM_BUF_ROWS) break;
@@ -745,7 +748,6 @@ static void draw_desktop(void)
             }
         }
     }
-
     /* Bottom taskbar — Aero glass */
     vga_gradient(0, TBAR_Y,   SCR_W, TBAR_H/2,    0x182840, 0x0C1828);
     vga_gradient(0, TBAR_Y+TBAR_H/2, SCR_W, TBAR_H-TBAR_H/2, 0x0A1420, 0x141E30);
@@ -841,8 +843,10 @@ static void draw_desktop(void)
        when spawned without stealing keyboard from the shell. */
     int ztop = (wm_z_top >= 0 && wm_z_top < WM_MAX_WIN &&
                 wm_wins[wm_z_top].alive) ? wm_z_top : wm_focused;
-    for (int i = 0; i < WM_MAX_WIN; i++)
-        if (i != ztop) draw_window(i);
+    for (int i = 0; i < WM_MAX_WIN; i++) {
+        if (i != ztop)
+            draw_window(i);
+    }
     if (ztop >= 0) draw_window(ztop);
 
     /* Start menu popup (always on top of everything) */
@@ -1801,10 +1805,6 @@ void wm_run(void)
             } else {
                 vga_begin_frame();
                 draw_desktop();
-                /* Snapshot cursor position immediately before the blit.
-                   vga_end_frame_cursor composites the cursor inline as each
-                   scan row is written to VRAM — the cursor is never absent
-                   on screen, even during the full 800×600 blit. */
                 int dcx = mouse_x, dcy = mouse_y;
                 vga_end_frame_cursor(dcx, dcy, CUR_W, CUR_H,
                                      &cursor_shape[0][0], C_CURSOR_OUT, C_CURSOR);

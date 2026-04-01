@@ -1,5 +1,7 @@
 #include "vga.h"
 #include "../kernel/scroll.h"
+#include "../drivers/serial.h"
+#include "../drivers/pit.h"
 
 /* ── FRAMEBUFFER POINTER & DIMENSIONS ───────────────────────────── */
 
@@ -570,10 +572,8 @@ void vga_end_frame(void)
 void vga_end_frame_cursor(int cx, int cy, int cw, int ch,
                           const uint8_t *shape, uint32_t c_out, uint32_t c_in)
 {
-    /* Blit back buffer → real screen, compositing the cursor inline so the
-       cursor is always visible when each scan row lands on screen.
-       This eliminates the brief cursor-absent window that exists between
-       a plain vga_end_frame() and a subsequent vga_cursor_blit() call. */
+    static int blit_count = 0;
+    uint32_t t0 = pit_get_ticks();
     if (!real_gfx_mem) return;
     uint32_t *src = (uint32_t*)wm_back_buf;
     uint32_t *dst = (uint32_t*)real_gfx_mem;
@@ -602,6 +602,29 @@ void vga_end_frame_cursor(int cx, int cy, int cw, int ch,
         }
     }
     GFX_MEM = real_gfx_mem;
+    {
+        uint32_t t1 = pit_get_ticks();
+        uint32_t dt = t1 - t0;
+        blit_count++;
+        if (blit_count <= 5 || dt > 2) {
+            /* print blit count and duration in ticks (100Hz = 10ms/tick) */
+            char buf[48];
+            int i = 0;
+            buf[i++] = 'B'; buf[i++] = 'L'; buf[i++] = 'I'; buf[i++] = 'T';
+            buf[i++] = '#';
+            int n = blit_count; if (n > 999) n = 999;
+            if (n >= 100) buf[i++] = '0' + n/100;
+            if (n >= 10)  buf[i++] = '0' + (n/10)%10;
+            buf[i++] = '0' + n%10;
+            buf[i++] = ' '; buf[i++] = 'd'; buf[i++] = 't'; buf[i++] = '=';
+            int d = (int)dt; if (d > 999) d = 999;
+            if (d >= 100) buf[i++] = '0' + d/100;
+            if (d >= 10)  buf[i++] = '0' + (d/10)%10;
+            buf[i++] = '0' + d%10;
+            buf[i++] = '\n'; buf[i] = 0;
+            serial_puts(buf);
+        }
+    }
 }
 
 void vga_abort_frame(void)

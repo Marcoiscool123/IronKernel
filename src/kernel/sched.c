@@ -69,18 +69,23 @@ int task_spawn(const char *name, void (*func)(void))
     /* Build initial stack frame to match what task_switch pops:
        task_switch does: pop r15 r14 r13 r12 rbx rbp  then  ret
        So we push (from top of stack downward):
-         task_exit   (return addr if func() returns)
-         func        (the ret in task_switch jumps here first time)
-         rbp=0 rbx=0 r12=0 r13=0 r14=0 r15=0  (lowest address / top of stack) */
+         task_exit          (jmp target in task_entry_sti if func returns)
+         task_entry_sti     (the ret in task_switch jumps here first time)
+         rbp=0
+         func               (rbx — task_entry_sti calls rbx after sti)
+         r12=0 r13=0 r14=0 r15=0  (lowest address / top of stack)
+       task_entry_sti does sti then calls rbx (func), fixing the bug where
+       spawned tasks start with IF=0 (interrupts disabled) because task_switch
+       is called from inside a PIT interrupt handler (interrupt gate clears IF). */
     uint64_t *sp = (uint64_t*)(t->stack + TASK_STACK_SIZE);
-    *(--sp) = (uint64_t)task_exit;  /* guard: if func returns */
-    *(--sp) = (uint64_t)func;       /* first-time ret target  */
-    *(--sp) = 0;                    /* rbp */
-    *(--sp) = 0;                    /* rbx */
-    *(--sp) = 0;                    /* r12 */
-    *(--sp) = 0;                    /* r13 */
-    *(--sp) = 0;                    /* r14 */
-    *(--sp) = 0;                    /* r15 — top of frame, RSP points here */
+    *(--sp) = (uint64_t)task_exit;       /* jmp target if func returns     */
+    *(--sp) = (uint64_t)task_entry_sti;  /* first-time ret target          */
+    *(--sp) = 0;                         /* rbp */
+    *(--sp) = (uint64_t)func;            /* rbx — func pointer for sti trampoline */
+    *(--sp) = 0;                         /* r12 */
+    *(--sp) = 0;                         /* r13 */
+    *(--sp) = 0;                         /* r14 */
+    *(--sp) = 0;                         /* r15 — top of frame, RSP points here */
     t->rsp = (uint64_t)sp;
 
     task_count++;

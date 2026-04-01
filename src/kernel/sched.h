@@ -67,6 +67,7 @@ void    sched_yield(void);
 
 /* Defined in boot/switch.asm — swaps kernel stack pointers */
 void task_switch(uint64_t *old_rsp, uint64_t new_rsp);
+void task_entry_sti(void);  /* first-time entry trampoline: sti then calls task func */
 
 task_t *sched_get_tasks(void);
 int     sched_get_count(void);
